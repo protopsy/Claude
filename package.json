@@ -1,0 +1,11 @@
+{
+  "name": "exam-study-manager",
+  "version": "0.1.0",
+  "description": "Browser app for exam preparation using active recall, spaced repetition, interleaving and Pomodoro.",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "start": "python3 -m http.server 8000"
+  },
+  "license": "MIT"
+}

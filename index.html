@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Exam Study Manager</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Exam Study Manager</div>
+    <nav class="nav">
+      <button data-nav="dashboard">Today</button>
+      <button data-nav="study">Study</button>
+      <button data-nav="practice">Practice test</button>
+      <button data-nav="decks">Decks</button>
+      <button data-nav="stats">Stats</button>
+      <button data-nav="settings">Settings</button>
+      <button data-nav="guide">How it works</button>
+    </nav>
+    <div class="pomo" id="pomo" title="Pomodoro timer">
+      <span class="pomo-mode" id="pomo-mode">Focus</span>
+      <span class="pomo-time" id="pomo-time">25:00</span>
+      <button data-action="pomo-toggle" id="pomo-toggle">Start</button>
+      <button data-action="pomo-reset" class="ghost" title="Reset timer">↺</button>
+      <button data-action="pomo-skip" class="ghost" title="Skip to next phase">⏭</button>
+    </div>
+  </header>
+
+  <main id="app"></main>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/core.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
