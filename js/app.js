@@ -141,6 +141,45 @@
     toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
   }
 
+  // In-page dialogs: confirm()/prompt()/alert() are blocked when the app runs embedded (e.g. as a Claude artifact).
+  let pendingConfirm = null;
+
+  function showModal(html) {
+    const m = $('#modal');
+    m.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">${html}</div>`;
+    m.hidden = false;
+    const f = m.querySelector('[data-autofocus]');
+    if (f) f.focus();
+  }
+
+  function closeModal() {
+    const m = $('#modal');
+    m.hidden = true;
+    m.innerHTML = '';
+    pendingConfirm = null;
+  }
+
+  function askConfirm(message, okLabel, onOk) {
+    showModal(`<p>${esc(message)}</p>
+      <div class="row modal-actions">
+        <button data-action="modal-cancel">취소</button>
+        <button class="primary" data-action="modal-ok" data-autofocus>${esc(okLabel)}</button>
+      </div>`);
+    pendingConfirm = onOk;
+  }
+
+  function copyText(text, textarea) {
+    const fallback = () => {
+      if (textarea) { textarea.focus(); textarea.select(); }
+      toast('자동 복사가 막혀 있습니다. 선택된 내용을 Ctrl+C(휴대폰은 길게 눌러 복사)로 복사하세요.');
+    };
+    try {
+      navigator.clipboard.writeText(text).then(() => toast('복사했습니다. 메모장 등에 붙여넣어 저장하세요.'), fallback);
+    } catch (_) {
+      fallback();
+    }
+  }
+
   function shuffle(arr) {
     const a = [...arr];
     for (let i = a.length - 1; i > 0; i--) {
@@ -773,10 +812,11 @@
       </section>
       <section class="panel">
         <h2>내 데이터</h2>
-        <p class="small muted">모든 데이터는 이 브라우저에만 저장됩니다. 정기적으로 백업을 내보내고, 다른 기기나 브라우저로 옮길 때도 이 파일을 사용하세요.</p>
+        <p class="small muted">모든 데이터는 지금 쓰고 있는 이 브라우저에만 저장됩니다. 정기적으로 백업을 내보내고, 다른 기기나 브라우저로 옮길 때도 이 백업을 사용하세요.</p>
         <div class="row">
           <button data-action="export">백업 내보내기</button>
-          <button type="button" data-action="import">백업 가져오기</button>
+          <button type="button" data-action="import-paste">백업 붙여넣어 가져오기</button>
+          <button type="button" data-action="import">백업 파일 가져오기</button>
           <input type="file" id="import-file" accept="application/json,.json" hidden>
           <button class="danger" data-action="reset-all">모든 데이터 삭제</button>
         </div>
@@ -800,32 +840,63 @@
     render();
   }
 
+  function backupFileName() {
+    return `study-backup-${C.dayKey(Date.now())}.json`;
+  }
+
   function exportData() {
+    showModal(`<h2>백업 내보내기</h2>
+      <p class="small muted">아래 내용을 복사해 메모장, 카카오톡 나와의 채팅 등에 저장해 두세요. 나중에 "백업 붙여넣어 가져오기"로 그대로 복원할 수 있습니다.</p>
+      <textarea id="backup-text" rows="8" readonly>${esc(JSON.stringify(state))}</textarea>
+      <div class="row modal-actions">
+        <button data-action="modal-cancel">닫기</button>
+        <button data-action="export-file">파일로 저장</button>
+        <button class="primary" data-action="export-copy" data-autofocus>복사</button>
+      </div>
+      <p class="small muted">"파일로 저장"은 index.html을 브라우저에서 직접 열었을 때만 동작합니다.</p>`);
+  }
+
+  function exportFile() {
     const blob = new Blob([JSON.stringify(state, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `study-backup-${C.dayKey(Date.now())}.json`;
+    a.download = backupFileName();
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
+  function restoreFromText(text) {
+    let data;
+    try {
+      data = normalize(JSON.parse(text));
+    } catch (err) {
+      toast(`가져오지 못했습니다. 백업 내용 전체를 빠짐없이 붙여넣었는지 확인하세요. (${err.message})`);
+      return;
+    }
+    askConfirm(`현재 데이터를 모두 이 백업(카드 ${data.cards.length}장)으로 바꿀까요?`, '바꾸기', () => {
+      state = data;
+      save();
+      toast('백업을 가져왔습니다.');
+      navigate('dashboard');
+    });
+  }
+
   function importData(file) {
     const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const data = normalize(JSON.parse(reader.result));
-        if (!confirm(`현재 데이터를 모두 이 백업(카드 ${data.cards.length}장)으로 바꿀까요?`)) return;
-        state = data;
-        save();
-        toast('백업을 가져왔습니다.');
-        navigate('dashboard');
-      } catch (err) {
-        alert(`가져오기 실패: ${err.message}`);
-      }
-    };
+    reader.onload = () => restoreFromText(String(reader.result));
     reader.readAsText(file);
+  }
+
+  function importPaste() {
+    showModal(`<h2>백업 붙여넣어 가져오기</h2>
+      <p class="small muted">"백업 내보내기"로 복사해 둔 내용을 아래에 붙여넣으세요.</p>
+      <textarea id="paste-text" rows="8" data-autofocus></textarea>
+      <div class="row modal-actions">
+        <button data-action="modal-cancel">취소</button>
+        <button class="primary" data-action="import-paste-go">가져오기</button>
+      </div>`);
   }
 
   // ---------- guide ----------
@@ -980,6 +1051,7 @@
       if (!nav.disabled) navigate(nav.dataset.nav);
       return;
     }
+    if (e.target.id === 'modal') { closeModal(); return; }
     const el = e.target.closest('[data-action]');
     if (!el) return;
     const { action, id } = el.dataset;
@@ -1002,32 +1074,39 @@
       case 'edit-card': ui.editingCardId = id; render(); break;
       case 'cancel-edit': ui.editingCardId = null; render(); break;
       case 'goto-card': ui.view = 'deck'; ui.deckId = el.dataset.deck; ui.editingCardId = id; render(); break;
+      case 'modal-ok': {
+        const fn = pendingConfirm;
+        closeModal();
+        if (fn) fn();
+        break;
+      }
+      case 'modal-cancel': closeModal(); break;
       case 'delete-card':
-        if (confirm('이 카드를 삭제할까요?')) {
+        askConfirm('이 카드를 삭제할까요?', '삭제', () => {
           state.cards = state.cards.filter((c) => c.id !== id);
           save();
           render();
-        }
+        });
         break;
-      case 'reset-card': {
-        const i = state.cards.findIndex((c) => c.id === id);
-        if (i >= 0 && confirm('이 카드를 새 카드로 초기화할까요? 지금까지의 복습 기록은 통계에 남습니다.')) {
+      case 'reset-card':
+        askConfirm('이 카드를 새 카드로 초기화할까요? 지금까지의 복습 기록은 통계에 남습니다.', '초기화', () => {
+          const i = state.cards.findIndex((c) => c.id === id);
+          if (i < 0) return;
           const c = state.cards[i];
           state.cards[i] = { ...C.createCard(c.deckId, c.front, c.back, c.createdAt), id: c.id };
           ui.editingCardId = null;
           save();
           render();
-        }
+        });
         break;
-      }
       case 'delete-deck': {
         const n = state.cards.filter((c) => c.deckId === id).length;
-        if (confirm(`"${deckName(id)}" 덱과 카드 ${n}장을 삭제할까요? 되돌릴 수 없습니다.`)) {
+        askConfirm(`"${deckName(id)}" 덱과 카드 ${n}장을 삭제할까요? 되돌릴 수 없습니다.`, '덱 삭제', () => {
           state.decks = state.decks.filter((d) => d.id !== id);
           state.cards = state.cards.filter((c) => c.deckId !== id);
           save();
           navigate('decks');
-        }
+        });
         break;
       }
       case 'practice-reveal': {
@@ -1041,13 +1120,27 @@
       case 'practice-requeue': requeueMissed(); break;
       case 'practice-again': ui.practice = { stage: 'setup', deckId: ui.practice.deckId }; render(); break;
       case 'export': exportData(); break;
+      case 'export-copy': {
+        const ta = $('#backup-text');
+        copyText(ta.value, ta);
+        break;
+      }
+      case 'export-file': exportFile(); break;
       case 'import': $('#import-file').click(); break;
+      case 'import-paste': importPaste(); break;
+      case 'import-paste-go': {
+        const text = $('#paste-text').value.trim();
+        if (!text) { toast('백업 내용을 붙여넣어 주세요.'); break; }
+        closeModal();
+        restoreFromText(text);
+        break;
+      }
       case 'reset-all':
-        if (prompt('모든 덱, 카드, 기록이 삭제됩니다. 계속하려면 "삭제"라고 입력하세요.') === '삭제') {
+        askConfirm('모든 덱, 카드, 학습 기록을 삭제합니다. 되돌릴 수 없으니 먼저 백업을 내보내 두세요.', '모두 삭제', () => {
           state = emptyState();
           save();
           navigate('dashboard');
-        }
+        });
         break;
       case 'pomo-toggle': pomoToggle(); break;
       case 'pomo-reset': pomo.running = false; pomo.remaining = pomoLength(pomo.mode); updatePomo(); break;
@@ -1136,6 +1229,11 @@
   document.addEventListener('keydown', (e) => {
     const t = e.target;
     const typing = t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.tagName === 'SELECT';
+
+    if (!$('#modal').hidden) {
+      if (e.key === 'Escape') closeModal();
+      return;
+    }
 
     // Ctrl/Cmd+Enter submits the form being edited (e.g. add card).
     if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && t.form && t.form.dataset.form) {
