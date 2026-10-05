@@ -21,7 +21,7 @@
   const HARD = 2;
   const GOOD = 3;
   const EASY = 4;
-  const GRADE_LABELS = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
+  const GRADE_LABELS = { 1: '다시', 2: '어려움', 3: '알맞음', 4: '쉬움' };
 
   const DEFAULTS = {
     learningSteps: [1, 10], // minutes between first-time recall attempts
@@ -175,16 +175,16 @@
   // ---------- formatting ----------
 
   function formatDays(d) {
-    if (d < 30) return `${d}d`;
-    if (d < 365) return `${+(d / 30).toFixed(1)}mo`;
-    return `${+(d / 365).toFixed(1)}y`;
+    if (d < 30) return `${d}일`;
+    if (d < 365) return `${+(d / 30).toFixed(1)}개월`;
+    return `${+(d / 365).toFixed(1)}년`;
   }
 
   function formatDuration(ms) {
     const m = Math.round(ms / MINUTE);
-    if (m < 60) return `${Math.max(1, m)}m`;
+    if (m < 60) return `${Math.max(1, m)}분`;
     const h = Math.round(ms / HOUR);
-    if (h < 24) return `${h}h`;
+    if (h < 24) return `${h}시간`;
     return formatDays(Math.round(ms / DAY));
   }
 

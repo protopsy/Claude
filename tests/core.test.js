@@ -141,10 +141,10 @@ test('stats: retention, streak and forecast', () => {
 });
 
 test('formatting helpers', () => {
-  assert.equal(C.formatDuration(10 * C.MINUTE), '10m');
-  assert.equal(C.formatDuration(3 * C.HOUR), '3h');
-  assert.equal(C.formatDays(45), '1.5mo');
+  assert.equal(C.formatDuration(10 * C.MINUTE), '10분');
+  assert.equal(C.formatDuration(3 * C.HOUR), '3시간');
+  assert.equal(C.formatDays(45), '1.5개월');
   assert.equal(C.parseDate('2026-10-14'), new Date(2026, 9, 14).getTime());
   assert.equal(C.parseDate('nope'), null);
-  assert.equal(C.previewLabel(C.createCard('d', 'Q', 'A', NOW), C.AGAIN, NOW), '1m');
+  assert.equal(C.previewLabel(C.createCard('d', 'Q', 'A', NOW), C.AGAIN, NOW), '1분');
 });

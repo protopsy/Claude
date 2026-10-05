@@ -1,57 +1,57 @@
-# Exam Study Manager
+# 시험 공부 매니저
 
-A browser app for preparing for an exam with study techniques that are backed by research:
+연구로 효과가 입증된 학습법으로 시험을 준비하는 브라우저 앱입니다.
 
-| Technique | What the app does |
+| 학습법 | 앱에서 하는 일 |
 |---|---|
-| **Active recall** | You see only the question, type your answer from memory, then compare it with the real answer. |
-| **Spaced repetition** | Every card is rescheduled based on how well you recalled it (Again / Hard / Good / Easy), using an SM-2 scheduler like Anki's. |
-| **Exam-aware planning** | Set your exam date. Reviews never land after it, unseen cards are spread over the days left, and the last few days are review-only. |
-| **Interleaving** | Study sessions mix cards from all your topics instead of one chapter at a time. |
-| **Practice tests** | Randomized exam-style tests with a score. Missed cards can go straight back into today's reviews. |
-| **Pomodoro** | A focus/break timer is always in the header (25/5 min, a long break every 4 rounds; all adjustable). |
-| **Weak-spot tracking** | Stats show your recall rate, streak, review history and forecast, and the cards you forget most. |
+| **능동적 회상** | 질문만 보고 기억나는 답을 직접 입력한 뒤 정답과 비교합니다. |
+| **간격 반복** | 얼마나 잘 기억했는지(다시 / 어려움 / 알맞음 / 쉬움)에 따라 카드마다 다음 복습일을 정합니다. Anki와 같은 SM-2 방식입니다. |
+| **시험 날짜 맞춤 계획** | 시험 날짜를 정하면 시험 이후로 잡히는 복습은 없습니다. 안 본 카드는 남은 날짜에 고르게 나뉘고, 마지막 며칠은 복습 전용입니다. |
+| **교차 학습** | 한 단원씩이 아니라 모든 과목의 카드를 섞어서 공부합니다. |
+| **모의 테스트** | 무작위 문제로 실제 시험처럼 점수를 냅니다. 틀린 카드는 바로 오늘 복습에 넣을 수 있습니다. |
+| **뽀모도로** | 화면 위쪽에 항상 집중/휴식 타이머가 있습니다(기본 25분/5분, 4번마다 긴 휴식, 모두 변경 가능). |
+| **약점 관리** | 기억률, 연속 학습일, 복습 기록과 예정, 자주 잊는 카드를 보여 줍니다. |
 
-## Getting started
+## 시작하기
 
-There's nothing to install. Open `index.html` in any modern browser (double-click the file).
+설치할 것이 없습니다. 브라우저에서 `index.html`을 여세요(파일을 더블클릭).
 
-If you'd rather serve it locally:
-
-```sh
-npm start        # serves on http://localhost:8000 (needs Python 3)
-```
-
-Then:
-1. **Settings** → enter your exam name and date.
-2. **Decks** → make one deck per topic or chapter and add question/answer cards. Use bulk import to paste
-   `question :: answer` lines, or two columns copied from a spreadsheet.
-3. **Today** → press *Start studying* every day and clear your due cards.
-
-### Keyboard shortcuts (study mode)
-
-- `Enter` in the answer box, or `Space`: reveal the answer
-- `1`–`4`: grade Again / Hard / Good / Easy (`Space` = Good)
-- `U`: undo the last answer
-- `Ctrl+Enter`: add a card while editing a deck
-
-## Your data
-
-Everything is stored in your browser's `localStorage`, on your device only. Use **Settings → Export backup**
-regularly. The same JSON file restores your data on another browser or computer.
-
-## Development
-
-```
-index.html        page shell
-css/styles.css    styling (light and dark mode)
-js/core.js        scheduler, queues and statistics: pure functions, no DOM
-js/app.js         UI, persistence and Pomodoro timer
-tests/            unit tests for core.js
-```
+로컬 서버로 열고 싶다면:
 
 ```sh
-npm test         # runs the unit tests with Node's built-in test runner (Node 18+)
+npm start        # http://localhost:8000 에서 열림 (Python 3 필요)
 ```
 
-There are no dependencies and no build step.
+그다음:
+1. **설정**에서 시험 이름과 날짜를 입력합니다.
+2. **덱**에서 과목(단원)마다 덱을 만들고 질문/정답 카드를 추가합니다. "한꺼번에 가져오기"에
+   `질문 :: 정답` 형식의 줄을 붙여넣거나, 스프레드시트에서 두 열을 복사해 붙여넣을 수 있습니다.
+3. 매일 **오늘** 화면에서 *학습 시작*을 누르고 할 카드를 모두 끝냅니다.
+
+### 단축키 (학습 화면)
+
+- 답 입력칸에서 `Enter`, 또는 `Space`: 정답 보기
+- `1`–`4`: 다시 / 어려움 / 알맞음 / 쉬움 (`Space` = 알맞음)
+- `U`: 마지막 답 되돌리기
+- `Ctrl+Enter`: 덱 편집 중 카드 추가
+
+## 데이터
+
+모든 데이터는 브라우저의 `localStorage`, 즉 내 기기에만 저장됩니다. **설정 → 백업 내보내기**로
+정기적으로 백업하세요. 같은 JSON 파일로 다른 브라우저나 컴퓨터에서 데이터를 복원할 수 있습니다.
+
+## 개발
+
+```
+index.html        페이지 뼈대
+css/styles.css    스타일 (라이트/다크 모드)
+js/core.js        복습 일정 계산, 학습 순서, 통계 (DOM 없는 순수 함수)
+js/app.js         화면, 저장, 뽀모도로 타이머
+tests/            core.js 단위 테스트
+```
+
+```sh
+npm test         # Node 내장 테스트 러너로 단위 테스트 실행 (Node 18 이상)
+```
+
+외부 라이브러리도 빌드 과정도 없습니다.

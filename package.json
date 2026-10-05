@@ -1,7 +1,7 @@
 {
   "name": "exam-study-manager",
   "version": "0.1.0",
-  "description": "Browser app for exam preparation using active recall, spaced repetition, interleaving and Pomodoro.",
+  "description": "능동적 회상, 간격 반복, 교차 학습, 뽀모도로로 시험을 준비하는 브라우저 앱",
   "private": true,
   "scripts": {
     "test": "node --test tests/*.test.js",
