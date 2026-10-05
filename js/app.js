@@ -47,7 +47,7 @@
       settings: { ...base.settings, ...(data.settings || {}) },
       pomodoro: { ...base.pomodoro, ...(data.pomodoro || {}) },
       extraNew: { ...base.extraNew, ...(data.extraNew || {}) },
-      plan: data.plan && Array.isArray(data.plan.materials) ? { log: {}, capacity: 100, ...data.plan } : null,
+      plan: data.plan && Array.isArray(data.plan.materials) ? { log: {}, ranges: {}, checks: {}, capacity: 100, ...data.plan } : null,
     };
   }
 
@@ -285,7 +285,7 @@
   function renderDashboard() {
     const now = Date.now();
     if (!state.cards.length) {
-      return `${renderExamPanel(now)}${renderTodayPlanSummary(now)}
+      return `${renderExamPanel(now)}${renderTodo(now)}
         <section class="panel empty">
           <h2>환영합니다! 공부할 내용을 준비해 볼까요?</h2>
           <p class="muted">시험 과목(단원)마다 덱을 하나씩 만들고, 그 안에 질문/답 카드를 추가하세요.</p>
@@ -328,10 +328,10 @@
       </tr>`;
     }).join('');
 
-    return `${renderExamPanel(now)}${renderTodayPlanSummary(now)}
+    return `${renderExamPanel(now)}${renderTodo(now)}
       <section class="panel">
         <div class="row spread">
-          <h2>오늘</h2>
+          <h2>카드 현황</h2>
           <span class="counts" title="학습 중 · 복습 · 새 카드">
             <span class="c-learn">${q.learningDue.length}</span>
             <span class="c-review">${q.reviewCount}</span>
@@ -954,7 +954,7 @@
   function createPlan() {
     const exam = opts().examDate;
     if (exam == null) return;
-    state.plan = { materials: P.defaultMaterials(exam, Date.now()), log: {}, capacity: 100 };
+    state.plan = { materials: P.defaultMaterials(exam, Date.now()), log: {}, ranges: {}, checks: {}, capacity: 100 };
     ui.planMonth = null;
     ui.planDay = null;
     save();
@@ -967,58 +967,204 @@
     if (!m) return;
     const key = C.dayKey(Date.now());
     const old = P.loggedOn(state.plan, key, id);
-    const v = Math.max(0, Math.min(toInt(value, 0), P.totalPages(m) - (m.done - old)));
-    m.done += v - old;
+    const base = m.done - old; // pages read before today
+    const v = Math.max(0, Math.min(toInt(value, 0), P.totalPages(m) - base));
+    m.done = base + v;
     if (!state.plan.log[key]) state.plan.log[key] = {};
-    if (v) state.plan.log[key][id] = v;
-    else delete state.plan.log[key][id];
+    if (!state.plan.ranges[key]) state.plan.ranges[key] = {};
+    if (v) {
+      state.plan.log[key][id] = v;
+      state.plan.ranges[key][id] = [base, base + v];
+    } else {
+      delete state.plan.log[key][id];
+      delete state.plan.ranges[key][id];
+    }
     save();
     render();
   }
 
-  function todayPlanItems(now) {
-    const cal = P.buildCalendar(state.plan, now);
-    return { cal, items: cal.get(C.dayKey(now)) || [] };
-  }
+  // ---------- today's to-do list ----------
 
-  function planItemRow(it, key) {
-    const m = it.m;
-    const logged = P.loggedOn(state.plan, key, m.id);
-    const done = logged >= it.pages;
-    return `<li class="plan-item${done ? ' done' : ''}">
-      <div class="plan-item-main">
-        <div>${subjectDot(m.subject)}<strong>${esc(m.subject)}</strong> <span class="muted">${esc(m.name)}</span>${it.overdue ? ' <span class="badge overdue">기간 지남</span>' : ''}</div>
-        <div class="small">${P.rangeLabel(m, it.from, it.to)} <span class="muted">· ${it.pages}쪽</span></div>
-      </div>
-      <div class="plan-item-log">
-        <input type="number" class="plan-log" id="log-${m.id}" data-id="${m.id}" min="0" inputmode="numeric" value="${logged}" aria-label="${esc(m.subject)} 오늘 읽은 쪽수">
-        <span class="small muted">/ ${it.pages}쪽</span>
-        <button data-action="plan-done" data-id="${m.id}" data-pages="${it.pages}" ${done ? 'class="is-done"' : ''}>${done ? '✓ 완료' : '다 했어요'}</button>
-      </div>
-    </li>`;
-  }
+  const REVIEW_MINUTES = 5;
 
-  function renderTodayPlanSummary(now) {
-    if (opts().examDate == null) return '';
-    if (!state.plan) {
-      return `<section class="panel">
-        <div class="row spread"><h2>오늘 공부 계획</h2><button class="primary" data-nav="plan">계획 만들기</button></div>
-        <p class="small muted">시험 날짜까지 매일 어떤 자료를 몇 쪽씩 읽을지 달력으로 정리해 드립니다.</p>
-      </section>`;
+  function checkBox(done, action, key, label, disabled) {
+    if (!action) {
+      return `<span class="check${done ? ' on' : ''}" role="img" aria-label="${done ? '완료' : '미완료'}"></span>`;
     }
+    return `<button class="check${done ? ' on' : ''}" role="checkbox" aria-checked="${done}" aria-label="${esc(label)}"
+      data-action="${action}" data-key="${esc(key)}" ${disabled ? 'disabled' : ''}></button>`;
+  }
+
+  function agoLabel(n) {
+    if (n === 1) return '어제';
+    if (n === 7) return '1주 전';
+    if (n === 21) return '3주 전';
+    return `${n}일 전`;
+  }
+
+  function todoStep(no, title, meta, hint, items) {
+    return `<div class="todo-step">
+      <h3><span class="step-no">${no}</span>${title}${meta ? ` <span class="muted small">${meta}</span>` : ''}</h3>
+      ${hint ? `<p class="small muted todo-hint">${hint}</p>` : ''}
+      <ul class="todo-list">${items}</ul>
+    </div>`;
+  }
+
+  function renderTodo(now) {
     const key = C.dayKey(now);
-    const { items } = todayPlanItems(now);
-    const total = P.dayTotal(items);
-    const read = items.reduce((s, it) => s + Math.min(it.pages, P.loggedOn(state.plan, key, it.m.id)), 0);
-    const list = items.map((it) => {
-      const logged = P.loggedOn(state.plan, key, it.m.id);
-      return `<li class="${logged >= it.pages ? 'done' : ''}">${subjectDot(it.m.subject)}<strong>${esc(it.m.subject)}</strong> ${P.rangeLabel(it.m, it.from, it.to)} <span class="muted small">${logged ? `${Math.min(logged, it.pages)}/` : ''}${it.pages}쪽</span></li>`;
-    }).join('');
-    return `<section class="panel">
-      <div class="row spread"><h2>오늘 공부 계획</h2><span class="small muted">${read} / ${total}쪽</span></div>
-      ${items.length ? `<ul class="plan-summary">${list}</ul>` : '<p class="muted">오늘은 읽을 분량이 없습니다. 카드 복습에 집중하세요.</p>'}
-      <div class="row" style="margin-top:.75em"><button data-nav="plan">계획 · 달력 열기</button></div>
+    const exam = opts().examDate;
+    const hasCards = state.cards.length > 0;
+    const t = state.plan && exam != null ? P.todayTasks(state.plan, now, exam) : null;
+    const steps = [];
+    let done = 0;
+    let total = 0;
+    const tick = (isDone) => { total++; if (isDone) done++; };
+
+    // 1. flashcards (spaced repetition)
+    if (hasCards) {
+      const q = queue(null, now);
+      const left = q.learningDue.length + q.mixed.length;
+      const studied = state.log.filter((e) => e.ts >= C.startOfDay(now)).length;
+      tick(left === 0);
+      const body = left
+        ? `<strong>카드 ${left}장</strong> <span class="muted small">학습 중 ${q.learningDue.length} · 복습 ${q.reviewCount} · 새 카드 ${q.newCount}</span>
+           <div><button class="primary" data-nav="study">학습 시작</button></div>`
+        : `<strong>오늘 카드 끝</strong> <span class="muted small">${studied}장 공부함${q.learningLater.length ? ` · 학습 중 ${q.learningLater.length}장은 잠시 후 다시 나옴` : ''}</span>`;
+      steps.push(['카드 복습', `약 ${Math.max(1, Math.round(left * 0.3))}분`, '잊을 때쯤 다시 나오는 카드입니다. 가장 먼저, 매일 끝내세요.',
+        `<li class="todo${left ? '' : ' done'}">${checkBox(left === 0)}<div class="todo-body">${body}</div></li>`]);
+    }
+
+    if (t) {
+      // 2. spaced review of ranges read earlier
+      if (t.reviews.length) {
+        const items = t.reviews.map((r) => {
+          tick(r.done);
+          return `<li class="todo${r.done ? ' done' : ''}">${checkBox(r.done, 'task-toggle', r.key, `${r.m.subject} 범위 복습`)}
+            <div class="todo-body"><div>${subjectDot(r.m.subject)}<strong>${esc(r.m.subject)}</strong> <span class="muted">${esc(r.m.name)}</span> · ${P.rangeLabel(r.m, r.from, r.to)}</div>
+              <div class="small muted">${agoLabel(r.ago)} 읽은 범위${r.overdue ? ' · <span class="warn">밀림</span>' : ''}</div></div></li>`;
+        }).join('');
+        steps.push(['지난 범위 복습', `${t.reviews.length}개 · 약 ${t.reviews.length * REVIEW_MINUTES}분`,
+          '책을 펴기 전에 목차와 소제목만 보고 내용을 떠올려 보세요. 막힌 부분만 다시 훑습니다.', items]);
+      }
+
+      // 3. new reading, each followed by recall (active recall)
+      if (t.reading.length) {
+        const items = t.reading.map((it) => {
+          const logged = P.loggedOn(state.plan, key, it.m.id);
+          const isDone = logged >= it.pages;
+          const rc = t.recalls.find((x) => x.m.id === it.m.id);
+          tick(isDone);
+          tick(rc && rc.done);
+          const recallLine = rc
+            ? `<div class="recall-line${rc.done ? ' done' : ''}">${checkBox(rc.done, 'task-toggle', rc.key, `${it.m.subject} 떠올리기`)}
+                <span>떠올리기${rc.done ? ' 완료' : ''}</span>${rc.done ? '' : `<button data-action="recall-open" data-id="${it.m.id}">책 덮고 떠올리기</button>`}</div>`
+            : '<div class="recall-line pending"><span class="check" aria-hidden="true"></span><span class="small muted">읽은 뒤 떠올리기</span></div>';
+          return `<li class="todo${isDone && rc && rc.done ? ' done' : ''}">${checkBox(isDone)}
+            <div class="todo-body">
+              <div>${subjectDot(it.m.subject)}<strong>${esc(it.m.subject)}</strong> <span class="muted">${esc(it.m.name)}</span>${it.overdue ? ' <span class="badge overdue">기간 지남</span>' : ''}</div>
+              <div class="small">${P.rangeLabel(it.m, it.from, it.to)} <span class="muted">· ${it.pages}쪽</span></div>
+              <div class="plan-item-log">
+                <input type="number" class="plan-log" id="log-${it.m.id}" data-id="${it.m.id}" min="0" inputmode="numeric" value="${logged}" aria-label="${esc(it.m.subject)} 오늘 읽은 쪽수">
+                <span class="small muted">/ ${it.pages}쪽</span>
+                <button data-action="plan-done" data-id="${it.m.id}" data-pages="${it.pages}" ${isDone ? 'class="is-done"' : ''}>${isDone ? '✓ 다 읽음' : '다 읽었어요'}</button>
+              </div>
+              ${recallLine}
+            </div></li>`;
+        }).join('');
+        const pages = P.dayTotal(t.reading);
+        steps.push(['새 범위 읽기 → 떠올리기', `${pages}쪽`,
+          '처음 이해하는 단계입니다. 다 읽으면 바로 책을 덮고 핵심을 떠올린 뒤 책과 비교하세요. 못 떠올린 것만 빈칸 카드로 만듭니다.', items]);
+      }
+
+      // 5. past questions (testing effect)
+      if (t.quizzes.length) {
+        const items = t.quizzes.map((qz) => {
+          tick(qz.done);
+          return `<li class="todo${qz.done ? ' done' : ''}">${checkBox(qz.done, 'task-toggle', qz.key, `${qz.m.subject} 기출 풀이`)}
+            <div class="todo-body"><div>${subjectDot(qz.m.subject)}<strong>${esc(qz.m.subject)} 기출 풀이</strong></div>
+              <div class="small muted">${esc(qz.label)}${qz.overdue ? ' · <span class="warn">밀림</span>' : ''}</div></div></li>`;
+        }).join('');
+        steps.push(['기출 풀이', `${t.quizzes.length}개`, '틀린 문제의 개념은 빈칸 카드로 만들어 두세요.', items]);
+      }
+    }
+
+    let setup = '';
+    if (!t) {
+      setup = exam == null
+        ? `<p class="small">시험 날짜를 정하면 매일 읽을 범위, 복습, 기출 풀이까지 이 목록에 모아 드립니다. <button data-nav="settings">시험 날짜 정하기</button></p>`
+        : `<p class="small">학습 계획을 만들면 매일 읽을 범위, 복습, 기출 풀이까지 이 목록에 모아 드립니다. <button class="primary" data-nav="plan">학습 계획 만들기</button></p>`;
+    }
+    if (!steps.length && !setup) return '';
+
+    const pomoToday = state.pomodoro.day === C.dayKey(now) ? state.pomodoro.completed : 0;
+    const pct = total ? Math.round((done / total) * 100) : 0;
+    const allDone = total > 0 && done === total;
+    return `<section class="panel todo-panel">
+      <div class="row spread">
+        <h2>오늘 할 일</h2>
+        <span class="small muted">${done} / ${total} 완료 · 뽀모도로 ${pomoToday}회</span>
+      </div>
+      <div class="plan-progress"><div style="width:${pct}%"></div></div>
+      ${allDone ? '<p class="todo-done-msg">오늘 할 일을 모두 끝냈습니다. 푹 쉬세요!</p>' : ''}
+      ${steps.map((s, i) => todoStep(i + 1, s[0], s[1], s[2], s[3])).join('')}
+      ${setup}
     </section>`;
+  }
+
+  // ---------- recall dialog ----------
+
+  function deckForSubject(subject) {
+    return state.decks.find((d) => d.name.includes(subject)) || null;
+  }
+
+  function openRecall(id) {
+    const key = C.dayKey(Date.now());
+    const r = ((state.plan.ranges || {})[key] || {})[id];
+    const m = state.plan.materials.find((x) => x.id === id);
+    if (!m || !r) return;
+    const match = deckForSubject(m.subject);
+    const options = state.decks.map((d) => `<option value="${d.id}" ${match && match.id === d.id ? 'selected' : ''}>${esc(d.name)}</option>`).join('');
+    showModal(`<h2>읽은 직후 떠올리기</h2>
+      <p class="small">${subjectDot(m.subject)}<strong>${esc(m.subject)}</strong> ${esc(m.name)} · ${P.rangeLabel(m, r[0], r[1])}</p>
+      <ol class="small recall-steps">
+        <li><strong>책을 덮고</strong> 방금 읽은 핵심을 2~3분 동안 생각나는 대로 적으세요.</li>
+        <li>책을 다시 펴서 비교하세요.</li>
+        <li><strong>못 떠올렸거나 틀린 것만</strong> 아래에 빈칸 문장으로 적으면 카드가 됩니다.</li>
+      </ol>
+      <label for="recall-text">떠올린 내용 <span class="muted small">(저장되지 않습니다)</span></label>
+      <textarea id="recall-text" rows="5" data-autofocus placeholder="책을 덮고 기억나는 대로 적어 보세요"></textarea>
+      <label for="recall-cards">못 떠올린 것 → 카드 <span class="muted small">한 줄에 하나, 외울 부분을 {{ }}로</span></label>
+      <textarea id="recall-cards" rows="4" placeholder="예: 고동 아말감은 {{γ₂}} 상이 거의 생기지 않는다"></textarea>
+      <label for="recall-deck">카드를 넣을 덱</label>
+      <select id="recall-deck">${options}<option value="__new__" ${match ? '' : 'selected'}>새 덱 만들기: ${esc(m.subject)}</option></select>
+      <div class="row modal-actions">
+        <button data-action="modal-cancel">나중에</button>
+        <button class="primary" data-action="recall-save" data-id="${m.id}">떠올리기 완료</button>
+      </div>`);
+  }
+
+  function saveRecall(id) {
+    const m = state.plan.materials.find((x) => x.id === id);
+    if (!m) return;
+    const key = C.dayKey(Date.now());
+    const { cards, skipped } = C.parseCardLines($('#recall-cards').value);
+    let deckId = $('#recall-deck').value;
+    if (cards.length) {
+      if (deckId === '__new__') {
+        const d = { id: C.makeId(), name: m.subject, createdAt: Date.now() };
+        state.decks.push(d);
+        deckId = d.id;
+      }
+      const now = Date.now();
+      cards.forEach(([f, b], i) => state.cards.push(C.createCard(deckId, f, b, now + i)));
+    }
+    state.plan.checks[`rc|${key}|${id}`] = key;
+    closeModal();
+    save();
+    render();
+    toast(cards.length
+      ? `카드 ${cards.length}장을 만들었습니다.${skipped ? ` ${skipped}줄은 {{ }}나 ::가 없어 건너뛰었습니다.` : ''}`
+      : '떠올리기를 완료했습니다.');
   }
 
   function renderPlan() {
@@ -1047,29 +1193,13 @@
       </section>`;
     }
 
-    const key = C.dayKey(now);
-    const { cal, items } = todayPlanItems(now);
-    const total = P.dayTotal(items);
-    const read = items.reduce((s, it) => s + Math.min(it.pages, P.loggedOn(state.plan, key, it.m.id)), 0);
+    const cal = P.buildCalendar(state.plan, now);
     const left = C.daysBetween(now, exam);
-    const q = queue(null, now);
-    const cardsDue = q.learningDue.length + q.mixed.length;
-
-    const today = `<section class="panel">
-      <div class="row spread">
-        <h1>오늘 할 공부</h1>
-        <span class="muted">${left > 0 ? `D-${left}` : left === 0 ? 'D-Day' : ''} · ${mdLabel(now)}</span>
-      </div>
-      <div class="plan-progress"><div style="width:${total ? Math.round((read / total) * 100) : 0}%"></div></div>
-      <p class="small muted">읽기 ${read} / ${total}쪽${total > planCapacity() ? ` · <span class="warn">하루 최대 ${planCapacity()}쪽을 넘었습니다</span>` : ''}</p>
-      ${items.length ? `<ul class="plan-list">${items.map((it) => planItemRow(it, key)).join('')}</ul>` : '<p class="muted">오늘은 읽을 분량이 없습니다.</p>'}
-      <div class="row" style="margin-top:.75em">
-        <button class="primary" data-nav="study" ${cardsDue ? '' : 'disabled'}>카드 복습 ${cardsDue}장</button>
-        <span class="small muted">읽은 쪽수를 적으면 못 한 분량은 남은 날짜에 자동으로 나눠집니다.</span>
-      </div>
+    const head = `<section class="panel">
+      <div class="row spread"><h1>학습 계획</h1><span class="muted">${left > 0 ? `D-${left}` : left === 0 ? 'D-Day' : ''}</span></div>
+      <p class="small muted">오늘 할 일(읽기, 지난 범위 복습, 떠올리기, 기출 풀이)은 <a href="#" data-nav="dashboard">오늘</a> 탭에 모여 있습니다. 여기서는 전체 일정을 보고 자료와 기간을 고칩니다.</p>
     </section>`;
-
-    return `${today}${renderCalendar(cal, now, exam)}${renderMaterials(now)}`;
+    return `${head}${renderCalendar(cal, now, exam)}${renderMaterials(now)}`;
   }
 
   function renderCalendar(cal, now, exam) {
@@ -1091,6 +1221,7 @@
     }
     const cap = planCapacity();
     const selected = ui.planDay || todayKey;
+    const extras = P.calendarExtras(state.plan, cal, now, exam);
 
     let cells = '';
     for (let i = 0; i < md.getDay(); i++) cells += '<div class="cal-cell blank" aria-hidden="true"></div>';
@@ -1112,11 +1243,18 @@
         <span class="cal-date">${d}</span>
         ${tot ? `<span class="cal-pages">${tot}쪽</span>` : ''}
         ${mk ? `<span class="cal-tag">${esc(mk.label)}</span>` : ''}
+        ${extras.has(k) ? `<span class="cal-sub">${[extras.get(k).reviews.length ? `복습 ${extras.get(k).reviews.length}` : '', extras.get(k).quizzes.length ? '기출' : ''].filter(Boolean).join(' · ')}</span>` : ''}
         <span class="cal-dots">${subjects.slice(0, 5).map(subjectDot).join('')}</span>
       </button>`;
     }
 
     const selTs = C.parseDate(selected);
+    const selEx = extras.get(selected) || { reviews: [], quizzes: [] };
+    const exList = [
+      ...selEx.quizzes.map((qz) => `<li>${subjectDot(qz.m.subject)}<strong>${esc(qz.m.subject)} 기출 풀이</strong> <span class="muted small">${esc(qz.label)}</span></li>`),
+      ...selEx.reviews.slice(0, 8).map((r) => `<li>${subjectDot(r.m.subject)}복습: ${esc(r.m.subject)} ${P.rangeLabel(r.m, r.from, r.to)} <span class="muted small">${agoLabel(r.ago)} 읽은 범위</span></li>`),
+      selEx.reviews.length > 8 ? `<li class="muted small">외 복습 ${selEx.reviews.length - 8}개</li>` : '',
+    ].join('');
     const selItems = cal.get(selected) || [];
     const selMark = marks.get(selected);
     const detail = selItems.length
@@ -1136,6 +1274,7 @@
       <div class="cal-detail">
         <h3>${selTs ? `${mdLabel(selTs)} (${['일', '월', '화', '수', '목', '금', '토'][new Date(selTs).getDay()]})` : ''}${selMark ? ` · ${esc(selMark.label)}` : ''} <span class="muted small">${P.dayTotal(selItems)}쪽</span></h3>
         ${detail}
+        ${exList ? `<ul class="plan-summary cal-extra">${exList}</ul>` : ''}
       </div>
       <div class="row small muted cal-legend">
         <label for="plan-capacity" style="margin:0;font-weight:normal">하루 최대</label>
@@ -1257,6 +1396,16 @@
       <h2>6. 뽀모도로</h2>
       <p>위쪽 타이머를 사용하세요. 25분 집중, 5분 휴식, 4번마다 긴 휴식입니다. 쉬는 시간이 집중력을 유지해 주고,
       타이머가 있으면 공부를 시작하기도 쉬워집니다.</p>
+
+      <h2>하루 루틴 ("오늘" 탭)</h2>
+      <p>오늘 탭의 할 일 목록을 위에서부터 순서대로 체크하세요.</p>
+      <ol>
+        <li><strong>카드 복습</strong>: 잊을 때쯤 다시 나오는 카드(간격 반복, 능동적 회상)</li>
+        <li><strong>지난 범위 복습</strong>: 1일·1주·3주 전에 읽은 범위를 목차만 보고 떠올린 뒤 막힌 곳만 훑기(간격 반복)</li>
+        <li><strong>새 범위 읽기</strong>: 계획 달력이 정한 오늘 분량. 못 읽은 분량은 남은 날짜에 자동으로 나눠짐</li>
+        <li><strong>읽은 직후 떠올리기</strong>: 책을 덮고 핵심을 적은 뒤 비교, 못 떠올린 것만 빈칸 카드로(능동적 회상)</li>
+        <li><strong>기출 풀이</strong>: 과목별 기간 중간과 끝(시험 효과)</li>
+      </ol>
 
       <h2>빈칸 카드로 빠르게 만들기</h2>
       <p>책의 중요한 문장을 그대로 적고 외울 부분만 <code>{{ }}</code>로 감싸세요. 빈칸마다 카드가 한 장씩 생깁니다.
@@ -1479,12 +1628,24 @@
       case 'pomo-skip': nextPhase(false); break;
       case 'plan-create': createPlan(); break;
       case 'plan-done': {
-        const m = state.plan.materials.find((x) => x.id === id);
         const key = C.dayKey(Date.now());
         const target = toInt(el.dataset.pages, 0);
-        setLogged(id, P.loggedOn(state.plan, key, id) >= target && m ? 0 : target);
+        const wasDone = P.loggedOn(state.plan, key, id) >= target;
+        setLogged(id, wasDone ? 0 : target);
+        if (!wasDone && !state.plan.checks[`rc|${key}|${id}`]) openRecall(id);
         break;
       }
+      case 'task-toggle': {
+        const k = el.dataset.key;
+        if (!k || !state.plan) break;
+        if (state.plan.checks[k]) delete state.plan.checks[k];
+        else state.plan.checks[k] = C.dayKey(Date.now());
+        save();
+        render();
+        break;
+      }
+      case 'recall-open': openRecall(id); break;
+      case 'recall-save': saveRecall(id); break;
       case 'plan-day': ui.planDay = el.dataset.key; render(); break;
       case 'plan-month': {
         const d = new Date(ui.planMonth || Date.now());

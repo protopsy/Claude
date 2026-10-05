@@ -164,8 +164,121 @@
     return list;
   }
 
+  // ---------- review, recall and past-question tasks ----------
+
+  /** Days after reading on which a range comes back for a short review (expanding intervals). */
+  const REVIEW_OFFSETS = [1, 7, 21];
+  /** Subjects where the OT guide says to skim past questions before starting. */
+  const QUIZ_FIRST = ['치과교정학', '치과보존학'];
+
+  /** Ranges actually read: [{ day, m, from, to }] from plan.ranges. */
+  function actualReadings(plan) {
+    const out = [];
+    for (const [day, entries] of Object.entries(plan.ranges || {})) {
+      for (const m of plan.materials || []) {
+        const r = entries[m.id];
+        if (r && r[1] > r[0]) out.push({ day, m, from: r[0], to: r[1] });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Review tasks for read ranges: 1 day, 1 week and 3 weeks after reading, pulled in to the day
+   * before the exam when they would land later. [{ key, due, readDay, m, from, to, ago }]
+   */
+  function reviewTasks(readings, examTs) {
+    const last = C.addDays(examTs, -1);
+    const out = [];
+    for (const rd of readings) {
+      const readTs = C.parseDate(rd.day);
+      const seen = new Set();
+      for (const off of REVIEW_OFFSETS) {
+        const due = Math.min(C.addDays(readTs, off), last);
+        if (due <= readTs) continue;
+        const dueKey = C.dayKey(due);
+        if (seen.has(dueKey)) continue;
+        seen.add(dueKey);
+        out.push({
+          key: `rv|${rd.day}|${rd.m.id}|${off}`,
+          due: dueKey,
+          readDay: rd.day,
+          m: rd.m,
+          from: rd.from,
+          to: rd.to,
+          ago: C.daysBetween(readTs, due),
+        });
+      }
+    }
+    return out;
+  }
+
+  /** Past-question sessions per subject book: midway and at the end of its window (and at the start for some). */
+  function quizTasks(materials) {
+    const out = [];
+    for (const m of materials || []) {
+      if (m.subject === '전과목' || m.group === '라플' || m.group === '복습') continue;
+      const s = C.parseDate(m.start);
+      const e = C.parseDate(m.end);
+      if (s == null || e == null) continue;
+      const mid = C.addDays(s, Math.floor(C.daysBetween(s, e) / 2));
+      const list = [];
+      if (QUIZ_FIRST.includes(m.subject)) list.push(['start', s, '공부 시작 전 기출로 출제 경향 훑기']);
+      if (mid > s && mid < e) list.push(['mid', mid, '지금까지 읽은 범위 기출 풀이']);
+      list.push(['end', e, '기간 마무리 기출 풀이']);
+      for (const [kind, ts, label] of list) {
+        out.push({ key: `qz|${m.id}|${kind}`, due: C.dayKey(ts), m, kind, label });
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Everything for today: reading slices, due reviews and past-question sessions (overdue ones carry
+   * over until checked), and a recall step for each range read today.
+   */
+  function todayTasks(plan, todayTs, examTs) {
+    const today = C.dayKey(todayTs);
+    const checks = plan.checks || {};
+    const open = (t) => t.due <= today && (!checks[t.key] || checks[t.key] === today);
+    const mark = (t) => ({ ...t, overdue: t.due < today, done: !!checks[t.key] });
+    const reading = (buildCalendar(plan, todayTs).get(today) || []).filter((it) => !it.past);
+    const reviews = reviewTasks(actualReadings(plan), examTs).filter(open).map(mark)
+      .sort((a, b) => (a.due < b.due ? -1 : a.due > b.due ? 1 : 0));
+    const quizzes = quizTasks(plan.materials).filter(open).map(mark);
+    const recalls = [];
+    for (const [id, r] of Object.entries((plan.ranges || {})[today] || {})) {
+      const m = (plan.materials || []).find((x) => x.id === id);
+      if (m && r[1] > r[0]) {
+        const key = `rc|${today}|${id}`;
+        recalls.push({ key, m, from: r[0], to: r[1], done: !!checks[key] });
+      }
+    }
+    return { reading, reviews, quizzes, recalls };
+  }
+
+  /** Reviews and past-question sessions per day from today on, for the calendar. */
+  function calendarExtras(plan, cal, todayTs, examTs) {
+    const today = C.dayKey(todayTs);
+    const readings = actualReadings(plan).filter((r) => r.day <= today);
+    for (const [day, items] of cal) {
+      if (day <= today) continue;
+      for (const it of items) if (!it.past) readings.push({ day, m: it.m, from: it.from, to: it.to });
+    }
+    const out = new Map();
+    const add = (day, field, t) => {
+      if (!out.has(day)) out.set(day, { reviews: [], quizzes: [] });
+      out.get(day)[field].push(t);
+    };
+    const checks = plan.checks || {};
+    for (const t of reviewTasks(readings, examTs)) if (t.due >= today && !checks[t.key]) add(t.due, 'reviews', t);
+    for (const t of quizTasks(plan.materials)) if (t.due >= today && !checks[t.key]) add(t.due, 'quizzes', t);
+    return out;
+  }
+
   return {
     DENTAL_DEFAULTS, defaultMaterials, totalPages, loggedOn, position, rangeLabel,
     scheduleMaterial, buildCalendar, dayTotal, milestones,
+    REVIEW_OFFSETS, actualReadings, reviewTasks, quizTasks, todayTasks, calendarExtras,
   };
 });

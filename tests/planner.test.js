@@ -74,3 +74,60 @@ test('default plan follows the OT period strategy and fits before the exam', () 
   assert.ok(labels.includes('2027-01-14 국가고시'));
   assert.ok(labels.includes('2027-01-07 총족 배포(예상)'));
 });
+
+test('read ranges come back after 1 day, 1 week and 3 weeks, pulled in before the exam', () => {
+  const m = mat();
+  const rv = P.reviewTasks([{ day: iso(TODAY), m, from: 0, to: 14 }], day(100));
+  assert.deepEqual(rv.map((t) => t.due), [iso(day(1)), iso(day(7)), iso(day(21))]);
+  // exam in 10 days: the 3-week review moves to the day before the exam
+  const late = P.reviewTasks([{ day: iso(TODAY), m, from: 0, to: 14 }], day(10));
+  assert.deepEqual(late.map((t) => t.due), [iso(day(1)), iso(day(7)), iso(day(9))]);
+  // read the day before the exam: nothing left to schedule
+  assert.equal(P.reviewTasks([{ day: iso(day(9)), m, from: 0, to: 5 }], day(10)).length, 0);
+});
+
+test('past-question sessions: midway and end, plus a start session for 교정/보존', () => {
+  const q = P.quizTasks([mat({ id: 'a' }), mat({ id: 'b', subject: '치과교정학' }), mat({ id: 'c', subject: '전과목' })]);
+  assert.deepEqual(q.filter((t) => t.m.id === 'a').map((t) => t.kind), ['mid', 'end']);
+  assert.deepEqual(q.filter((t) => t.m.id === 'b').map((t) => t.kind), ['start', 'mid', 'end']);
+  assert.equal(q.filter((t) => t.m.id === 'c').length, 0);
+});
+
+test("today's tasks: due and overdue reviews until checked, recall for ranges read today", () => {
+  const m = mat({ done: 20 });
+  const plan = {
+    materials: [m],
+    log: { [iso(day(-1))]: { m: 10 }, [iso(TODAY)]: { m: 10 } },
+    ranges: { [iso(day(-1))]: { m: [0, 10] }, [iso(day(-8))]: { m: [0, 0] }, [iso(TODAY)]: { m: [10, 20] } },
+    checks: {},
+  };
+  let t = P.todayTasks(plan, TODAY, day(100));
+  assert.equal(t.reviews.length, 1);
+  assert.equal(t.reviews[0].ago, 1);
+  assert.equal(t.recalls.length, 1);
+  assert.deepEqual([t.recalls[0].from, t.recalls[0].to], [10, 20]);
+  assert.equal(t.reading.length, 1);
+
+  const checkedKey = t.reviews[0].key;
+  plan.checks[checkedKey] = iso(TODAY);
+  t = P.todayTasks(plan, TODAY, day(100));
+  assert.equal(t.reviews[0].done, true); // still listed today, shown as done
+  t = P.todayTasks(plan, day(1), day(100));
+  assert.ok(!t.reviews.some((r) => r.key === checkedKey)); // gone the next day
+  assert.ok(t.reviews.some((r) => r.readDay === iso(TODAY))); // today's reading is due tomorrow
+
+  // an unchecked review stays as overdue
+  delete plan.checks[`rv|${iso(day(-1))}|m|1`];
+  t = P.todayTasks(plan, day(2), day(100));
+  assert.equal(t.reviews[0].overdue, true);
+});
+
+test('calendar extras project reviews from planned reading', () => {
+  const m = mat();
+  const plan = { materials: [m], log: {}, ranges: {}, checks: {} };
+  const cal = P.buildCalendar(plan, TODAY);
+  const ex = P.calendarExtras(plan, cal, TODAY, day(100));
+  // planned reading on day 1 -> review on day 2
+  assert.ok(ex.get(iso(day(2))).reviews.some((r) => r.readDay === iso(day(1))));
+  assert.ok(ex.get(iso(day(9))).quizzes.some((q) => q.kind === 'end'));
+});
