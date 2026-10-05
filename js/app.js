@@ -4,6 +4,7 @@
 
   const C = window.StudyCore;
   const PRESETS = window.StudyPresets || [];
+  const P = window.StudyPlanner;
   const STORAGE_KEY = 'exam-study-manager.v1';
   const MAX_CARD_MS = 5 * C.MINUTE;
 
@@ -29,6 +30,7 @@
       settings: { ...DEFAULT_SETTINGS },
       pomodoro: { day: '', completed: 0 },
       extraNew: { day: '', count: 0 },
+      plan: null,
     };
   }
 
@@ -45,6 +47,7 @@
       settings: { ...base.settings, ...(data.settings || {}) },
       pomodoro: { ...base.pomodoro, ...(data.pomodoro || {}) },
       extraNew: { ...base.extraNew, ...(data.extraNew || {}) },
+      plan: data.plan && Array.isArray(data.plan.materials) ? { log: {}, capacity: 100, ...data.plan } : null,
     };
   }
 
@@ -199,6 +202,8 @@
     session: null,
     practice: null,
     refreshTimer: null,
+    planMonth: null,
+    planDay: null,
   };
 
   function newSession(deckId) {
@@ -221,6 +226,7 @@
     if (view === 'deck') ui.deckId = param;
     if (view === 'study') ui.session = newSession(param);
     if (view === 'practice') ui.practice = { stage: 'setup', deckId: param || '' };
+    if (view === 'plan') { ui.planMonth = null; ui.planDay = null; }
     render();
     window.scrollTo(0, 0);
   }
@@ -234,6 +240,7 @@
     stats: renderStats,
     settings: renderSettings,
     guide: renderGuide,
+    plan: renderPlan,
   };
 
   function render() {
@@ -278,7 +285,7 @@
   function renderDashboard() {
     const now = Date.now();
     if (!state.cards.length) {
-      return `${renderExamPanel(now)}
+      return `${renderExamPanel(now)}${renderTodayPlanSummary(now)}
         <section class="panel empty">
           <h2>환영합니다! 공부할 내용을 준비해 볼까요?</h2>
           <p class="muted">시험 과목(단원)마다 덱을 하나씩 만들고, 그 안에 질문/답 카드를 추가하세요.</p>
@@ -321,7 +328,7 @@
       </tr>`;
     }).join('');
 
-    return `${renderExamPanel(now)}
+    return `${renderExamPanel(now)}${renderTodayPlanSummary(now)}
       <section class="panel">
         <div class="row spread">
           <h2>오늘</h2>
@@ -927,6 +934,293 @@
       </div>`);
   }
 
+  // ---------- study planner ----------
+
+  function subjectDot(subject) {
+    let h = 0;
+    for (const ch of String(subject)) h = (h * 31 + ch.charCodeAt(0)) % 360;
+    return `<span class="dot" style="--h:${h}" aria-hidden="true"></span>`;
+  }
+
+  function mdLabel(ts) {
+    const d = new Date(ts);
+    return `${d.getMonth() + 1}/${d.getDate()}`;
+  }
+
+  function planCapacity() {
+    return Math.max(1, toInt(state.plan && state.plan.capacity, 100));
+  }
+
+  function createPlan() {
+    const exam = opts().examDate;
+    if (exam == null) return;
+    state.plan = { materials: P.defaultMaterials(exam, Date.now()), log: {}, capacity: 100 };
+    ui.planMonth = null;
+    ui.planDay = null;
+    save();
+    render();
+    toast('OT 자료의 기간별 전략으로 기본 계획을 만들었습니다. 쪽수는 책을 보고 고쳐 주세요.');
+  }
+
+  function setLogged(id, value) {
+    const m = state.plan.materials.find((x) => x.id === id);
+    if (!m) return;
+    const key = C.dayKey(Date.now());
+    const old = P.loggedOn(state.plan, key, id);
+    const v = Math.max(0, Math.min(toInt(value, 0), P.totalPages(m) - (m.done - old)));
+    m.done += v - old;
+    if (!state.plan.log[key]) state.plan.log[key] = {};
+    if (v) state.plan.log[key][id] = v;
+    else delete state.plan.log[key][id];
+    save();
+    render();
+  }
+
+  function todayPlanItems(now) {
+    const cal = P.buildCalendar(state.plan, now);
+    return { cal, items: cal.get(C.dayKey(now)) || [] };
+  }
+
+  function planItemRow(it, key) {
+    const m = it.m;
+    const logged = P.loggedOn(state.plan, key, m.id);
+    const done = logged >= it.pages;
+    return `<li class="plan-item${done ? ' done' : ''}">
+      <div class="plan-item-main">
+        <div>${subjectDot(m.subject)}<strong>${esc(m.subject)}</strong> <span class="muted">${esc(m.name)}</span>${it.overdue ? ' <span class="badge overdue">기간 지남</span>' : ''}</div>
+        <div class="small">${P.rangeLabel(m, it.from, it.to)} <span class="muted">· ${it.pages}쪽</span></div>
+      </div>
+      <div class="plan-item-log">
+        <input type="number" class="plan-log" id="log-${m.id}" data-id="${m.id}" min="0" inputmode="numeric" value="${logged}" aria-label="${esc(m.subject)} 오늘 읽은 쪽수">
+        <span class="small muted">/ ${it.pages}쪽</span>
+        <button data-action="plan-done" data-id="${m.id}" data-pages="${it.pages}" ${done ? 'class="is-done"' : ''}>${done ? '✓ 완료' : '다 했어요'}</button>
+      </div>
+    </li>`;
+  }
+
+  function renderTodayPlanSummary(now) {
+    if (opts().examDate == null) return '';
+    if (!state.plan) {
+      return `<section class="panel">
+        <div class="row spread"><h2>오늘 공부 계획</h2><button class="primary" data-nav="plan">계획 만들기</button></div>
+        <p class="small muted">시험 날짜까지 매일 어떤 자료를 몇 쪽씩 읽을지 달력으로 정리해 드립니다.</p>
+      </section>`;
+    }
+    const key = C.dayKey(now);
+    const { items } = todayPlanItems(now);
+    const total = P.dayTotal(items);
+    const read = items.reduce((s, it) => s + Math.min(it.pages, P.loggedOn(state.plan, key, it.m.id)), 0);
+    const list = items.map((it) => {
+      const logged = P.loggedOn(state.plan, key, it.m.id);
+      return `<li class="${logged >= it.pages ? 'done' : ''}">${subjectDot(it.m.subject)}<strong>${esc(it.m.subject)}</strong> ${P.rangeLabel(it.m, it.from, it.to)} <span class="muted small">${logged ? `${Math.min(logged, it.pages)}/` : ''}${it.pages}쪽</span></li>`;
+    }).join('');
+    return `<section class="panel">
+      <div class="row spread"><h2>오늘 공부 계획</h2><span class="small muted">${read} / ${total}쪽</span></div>
+      ${items.length ? `<ul class="plan-summary">${list}</ul>` : '<p class="muted">오늘은 읽을 분량이 없습니다. 카드 복습에 집중하세요.</p>'}
+      <div class="row" style="margin-top:.75em"><button data-nav="plan">계획 · 달력 열기</button></div>
+    </section>`;
+  }
+
+  function renderPlan() {
+    const now = Date.now();
+    const exam = opts().examDate;
+    if (exam == null) {
+      return `<section class="panel empty">
+        <h2>먼저 시험 날짜를 정해 주세요</h2>
+        <p class="muted">계획은 시험 날짜를 기준으로 거꾸로 짭니다.</p>
+        <button class="primary" data-nav="settings">설정으로 가기</button>
+      </section>`;
+    }
+    if (!state.plan) {
+      return `<section class="panel">
+        <h1>학습 계획</h1>
+        <p>79회 OT 자료의 <strong>기간별 전략</strong>과 과목별 추천 자료로 시험 날짜까지의 읽기 계획을 만듭니다.</p>
+        <ul class="small">
+          <li><strong>초반 과목</strong>(지금부터): 치재(경희치재), 영상(교과서 13장까지), 외과(퍼플외과), 병리(테마병리), 교정(옳소교정), 치주(치주대마왕)</li>
+          <li><strong>중반 과목</strong>(D-80부터): 소치(소맥), 보철(골드크라운·olleh RPD), 보존(all in one), 내과(단내지존), 생물(생맥)</li>
+          <li><strong>후반 과목</strong>(D-60부터): 보건(보석건틀렛), 법규(법규王)</li>
+          <li><strong>라플</strong>: 배포 예상일(D-65)부터 1회독, 12월 중순부터 라플·단권화 자료 반복</li>
+          <li>시험 전 ${toInt(state.settings.examBufferDays, 2)}일은 복습 전용</li>
+        </ul>
+        <p class="small muted">쪽수는 임시값입니다. 만든 뒤 책의 마지막 쪽 번호를 보고 고치면 하루 분량이 자동으로 다시 계산됩니다.</p>
+        <button class="primary" data-action="plan-create">기본 계획 만들기</button>
+      </section>`;
+    }
+
+    const key = C.dayKey(now);
+    const { cal, items } = todayPlanItems(now);
+    const total = P.dayTotal(items);
+    const read = items.reduce((s, it) => s + Math.min(it.pages, P.loggedOn(state.plan, key, it.m.id)), 0);
+    const left = C.daysBetween(now, exam);
+    const q = queue(null, now);
+    const cardsDue = q.learningDue.length + q.mixed.length;
+
+    const today = `<section class="panel">
+      <div class="row spread">
+        <h1>오늘 할 공부</h1>
+        <span class="muted">${left > 0 ? `D-${left}` : left === 0 ? 'D-Day' : ''} · ${mdLabel(now)}</span>
+      </div>
+      <div class="plan-progress"><div style="width:${total ? Math.round((read / total) * 100) : 0}%"></div></div>
+      <p class="small muted">읽기 ${read} / ${total}쪽${total > planCapacity() ? ` · <span class="warn">하루 최대 ${planCapacity()}쪽을 넘었습니다</span>` : ''}</p>
+      ${items.length ? `<ul class="plan-list">${items.map((it) => planItemRow(it, key)).join('')}</ul>` : '<p class="muted">오늘은 읽을 분량이 없습니다.</p>'}
+      <div class="row" style="margin-top:.75em">
+        <button class="primary" data-nav="study" ${cardsDue ? '' : 'disabled'}>카드 복습 ${cardsDue}장</button>
+        <span class="small muted">읽은 쪽수를 적으면 못 한 분량은 남은 날짜에 자동으로 나눠집니다.</span>
+      </div>
+    </section>`;
+
+    return `${today}${renderCalendar(cal, now, exam)}${renderMaterials(now)}`;
+  }
+
+  function renderCalendar(cal, now, exam) {
+    const todayKey = C.dayKey(now);
+    const cur = new Date(now);
+    const firstMonth = new Date(cur.getFullYear(), cur.getMonth(), 1).getTime();
+    const lastMonth = new Date(new Date(exam).getFullYear(), new Date(exam).getMonth(), 1).getTime();
+    let month = ui.planMonth || firstMonth;
+    month = Math.min(Math.max(month, firstMonth), Math.max(firstMonth, lastMonth));
+    ui.planMonth = month;
+    const md = new Date(month);
+    const y = md.getFullYear();
+    const mo = md.getMonth();
+    const days = new Date(y, mo + 1, 0).getDate();
+    const marks = new Map();
+    for (const ms of P.milestones(exam, toInt(state.settings.examBufferDays, 2))) {
+      const k = C.dayKey(ms.ts);
+      if (!marks.has(k)) marks.set(k, ms);
+    }
+    const cap = planCapacity();
+    const selected = ui.planDay || todayKey;
+
+    let cells = '';
+    for (let i = 0; i < md.getDay(); i++) cells += '<div class="cal-cell blank" aria-hidden="true"></div>';
+    for (let d = 1; d <= days; d++) {
+      const ts = new Date(y, mo, d).getTime();
+      const k = C.dayKey(ts);
+      const its = cal.get(k) || [];
+      const tot = P.dayTotal(its);
+      const mk = marks.get(k);
+      const subjects = [...new Set(its.map((it) => it.m.subject))];
+      const cls = ['cal-cell'];
+      if (k === todayKey) cls.push('today');
+      if (k === selected) cls.push('selected');
+      if (k < todayKey) cls.push('past');
+      if (mk && mk.exam) cls.push('exam');
+      if (mk && mk.buffer) cls.push('buffer');
+      if (k >= todayKey && tot > cap) cls.push('over');
+      cells += `<button class="${cls.join(' ')}" data-action="plan-day" data-key="${k}" aria-label="${mo + 1}월 ${d}일 ${tot}쪽">
+        <span class="cal-date">${d}</span>
+        ${tot ? `<span class="cal-pages">${tot}쪽</span>` : ''}
+        ${mk ? `<span class="cal-tag">${esc(mk.label)}</span>` : ''}
+        <span class="cal-dots">${subjects.slice(0, 5).map(subjectDot).join('')}</span>
+      </button>`;
+    }
+
+    const selTs = C.parseDate(selected);
+    const selItems = cal.get(selected) || [];
+    const selMark = marks.get(selected);
+    const detail = selItems.length
+      ? `<ul class="plan-summary">${selItems.map((it) => (it.past
+        ? `<li>${subjectDot(it.m.subject)}<strong>${esc(it.m.subject)}</strong> ${esc(it.m.name)} <span class="muted small">${it.pages}쪽 읽음</span></li>`
+        : `<li>${subjectDot(it.m.subject)}<strong>${esc(it.m.subject)}</strong> ${esc(it.m.name)} · ${P.rangeLabel(it.m, it.from, it.to)} <span class="muted small">${it.pages}쪽</span></li>`)).join('')}</ul>`
+      : `<p class="muted small">${selected < todayKey ? '기록된 공부가 없습니다.' : selMark && selMark.buffer ? '새 분량 없이 복습만 합니다.' : selMark && selMark.exam ? '시험 날입니다. 행운을 빕니다!' : '읽을 분량이 없습니다.'}</p>`;
+
+    return `<section class="panel">
+      <div class="row spread">
+        <button class="ghost" data-action="plan-month" data-dir="-1" ${month <= firstMonth ? 'disabled' : ''} aria-label="이전 달">‹</button>
+        <h2 style="margin:0">${y}년 ${mo + 1}월</h2>
+        <button class="ghost" data-action="plan-month" data-dir="1" ${month >= lastMonth ? 'disabled' : ''} aria-label="다음 달">›</button>
+      </div>
+      <div class="cal-grid cal-head">${['일', '월', '화', '수', '목', '금', '토'].map((w) => `<div>${w}</div>`).join('')}</div>
+      <div class="cal-grid">${cells}</div>
+      <div class="cal-detail">
+        <h3>${selTs ? `${mdLabel(selTs)} (${['일', '월', '화', '수', '목', '금', '토'][new Date(selTs).getDay()]})` : ''}${selMark ? ` · ${esc(selMark.label)}` : ''} <span class="muted small">${P.dayTotal(selItems)}쪽</span></h3>
+        ${detail}
+      </div>
+      <div class="row small muted cal-legend">
+        <label for="plan-capacity" style="margin:0;font-weight:normal">하루 최대</label>
+        <input type="number" id="plan-capacity" min="1" max="2000" value="${cap}" style="width:6em"> 쪽을 넘는 날은 <span class="warn">빨간색</span>으로 표시
+      </div>
+    </section>`;
+  }
+
+  function renderMaterials(now) {
+    const rows = state.plan.materials.map((m) => {
+      const total = P.totalPages(m);
+      const pct = total ? Math.round((m.done / total) * 100) : 0;
+      return `<tr>
+        <td>${subjectDot(m.subject)}<strong>${esc(m.subject)}</strong> <span class="muted">${esc(m.name)}</span>
+          <div class="small muted">${m.pages}쪽 × ${m.rounds}회독 · ${mdLabel(C.parseDate(m.start))}~${mdLabel(C.parseDate(m.end))}${m.estimated ? ' <span class="badge overdue">쪽수 확인</span>' : ''}</div></td>
+        <td style="width:28%"><div class="row" style="flex-wrap:nowrap"><div class="progress" style="flex:1"><div style="width:${pct}%"></div></div><span class="small muted">${pct}%</span></div></td>
+        <td class="num"><button class="ghost" data-action="plan-edit" data-id="${m.id}" title="편집">✎</button></td>
+      </tr>`;
+    }).join('');
+    return `<section class="panel">
+      <div class="row spread"><h2>자료와 기간</h2><button data-action="plan-add">자료 추가</button></div>
+      <p class="small muted">"쪽수 확인" 표시는 임시 쪽수입니다. ✎를 눌러 실제 쪽수와 기간을 고치면 달력이 바로 다시 계산됩니다.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>과목 · 자료 · 분량 · 기간</th><th>진도</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div class="row" style="margin-top:1em"><button class="danger" data-action="plan-reset">기본 계획으로 다시 만들기</button></div>
+    </section>`;
+  }
+
+  function editMaterial(id) {
+    const m = id ? state.plan.materials.find((x) => x.id === id) : null;
+    const today = C.dayKey(Date.now());
+    const v = m || { subject: '', name: '', pages: 100, rounds: 1, start: today, end: C.dayKey(C.addDays(Date.now(), 30)), done: 0 };
+    showModal(`<h2>${m ? '자료 편집' : '자료 추가'}</h2>
+      <form data-form="plan-material" data-id="${m ? m.id : ''}">
+        <label for="pm-subject">과목</label>
+        <input type="text" id="pm-subject" name="subject" value="${esc(v.subject)}" required data-autofocus>
+        <label for="pm-name">자료 이름</label>
+        <input type="text" id="pm-name" name="name" value="${esc(v.name)}" required placeholder="예: 경희치재">
+        <div class="grid">
+          <div><label for="pm-pages">쪽수</label><input type="number" id="pm-pages" name="pages" min="1" value="${v.pages}" required></div>
+          <div><label for="pm-rounds">회독 수</label><input type="number" id="pm-rounds" name="rounds" min="1" max="10" value="${v.rounds}" required></div>
+        </div>
+        <div class="grid">
+          <div><label for="pm-start">시작일</label><input type="date" id="pm-start" name="start" value="${esc(v.start)}" required></div>
+          <div><label for="pm-end">끝낼 날</label><input type="date" id="pm-end" name="end" value="${esc(v.end)}" required></div>
+        </div>
+        <label for="pm-done">지금까지 읽은 쪽수 (모든 회독 합계)</label>
+        <input type="number" id="pm-done" name="done" min="0" value="${v.done}">
+        <div class="row modal-actions">
+          ${m ? `<button type="button" class="danger" data-action="plan-delete" data-id="${m.id}" style="margin-right:auto">삭제</button>` : ''}
+          <button type="button" data-action="modal-cancel">취소</button>
+          <button type="submit" class="primary">저장</button>
+        </div>
+      </form>`);
+  }
+
+  function saveMaterial(form) {
+    const fd = new FormData(form);
+    const start = String(fd.get('start') || '');
+    const end = String(fd.get('end') || '');
+    if (!C.parseDate(start) || !C.parseDate(end) || end < start) {
+      toast('끝낼 날은 시작일과 같거나 그 뒤여야 합니다.');
+      return;
+    }
+    const fields = {
+      subject: String(fd.get('subject') || '').trim(),
+      name: String(fd.get('name') || '').trim(),
+      pages: Math.max(1, toInt(fd.get('pages'), 1)),
+      rounds: Math.max(1, toInt(fd.get('rounds'), 1)),
+      start,
+      end,
+      estimated: false,
+    };
+    fields.done = Math.min(toInt(fd.get('done'), 0), fields.pages * fields.rounds);
+    const id = form.dataset.id;
+    if (id) Object.assign(state.plan.materials.find((x) => x.id === id), fields);
+    else state.plan.materials.push({ id: C.makeId(), group: '', ...fields });
+    closeModal();
+    save();
+    render();
+    toast('저장했습니다. 달력을 다시 계산했습니다.');
+  }
+
   // ---------- guide ----------
 
   function renderGuide() {
@@ -1183,6 +1477,34 @@
       case 'pomo-toggle': pomoToggle(); break;
       case 'pomo-reset': pomo.running = false; pomo.remaining = pomoLength(pomo.mode); updatePomo(); break;
       case 'pomo-skip': nextPhase(false); break;
+      case 'plan-create': createPlan(); break;
+      case 'plan-done': {
+        const m = state.plan.materials.find((x) => x.id === id);
+        const key = C.dayKey(Date.now());
+        const target = toInt(el.dataset.pages, 0);
+        setLogged(id, P.loggedOn(state.plan, key, id) >= target && m ? 0 : target);
+        break;
+      }
+      case 'plan-day': ui.planDay = el.dataset.key; render(); break;
+      case 'plan-month': {
+        const d = new Date(ui.planMonth || Date.now());
+        ui.planMonth = new Date(d.getFullYear(), d.getMonth() + Number(el.dataset.dir), 1).getTime();
+        render();
+        break;
+      }
+      case 'plan-edit': editMaterial(id); break;
+      case 'plan-add': editMaterial(null); break;
+      case 'plan-delete':
+        closeModal();
+        askConfirm('이 자료를 계획에서 삭제할까요?', '삭제', () => {
+          state.plan.materials = state.plan.materials.filter((x) => x.id !== id);
+          save();
+          render();
+        });
+        break;
+      case 'plan-reset':
+        askConfirm('지금 계획과 진도 기록을 지우고, 현재 시험 날짜 기준으로 기본 계획을 다시 만들까요?', '다시 만들기', createPlan);
+        break;
       default: break;
     }
   });
@@ -1255,11 +1577,22 @@
       }
       case 'practice-start': startPractice(form); break;
       case 'settings': saveSettings(form); break;
+      case 'plan-material': saveMaterial(form); break;
       default: break;
     }
   });
 
   document.addEventListener('change', (e) => {
+    if (e.target.classList.contains('plan-log')) {
+      setLogged(e.target.dataset.id, e.target.value);
+      return;
+    }
+    if (e.target.id === 'plan-capacity') {
+      state.plan.capacity = Math.max(1, toInt(e.target.value, 100));
+      save();
+      render();
+      return;
+    }
     if (e.target.id === 'import-file' && e.target.files[0]) {
       importData(e.target.files[0]);
       e.target.value = '';
