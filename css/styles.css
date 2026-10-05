@@ -191,6 +191,19 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 .pomo.running .pomo-time { color: var(--accent); }
 .pomo.break .pomo-time { color: var(--good); }
 
+.preset-list { display: grid; gap: 12px; }
+.preset {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: grid;
+  gap: .4em;
+  justify-items: start;
+}
+.preset p { margin: 0; }
+.preset-head { display: flex; flex-wrap: wrap; gap: .3em .8em; align-items: baseline; }
+code { font: .9em ui-monospace, monospace; background: var(--surface-2); padding: 0 .3em; border-radius: 4px; }
+
 .modal {
   position: fixed;
   inset: 0;

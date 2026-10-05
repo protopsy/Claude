@@ -172,6 +172,62 @@
     return c;
   }
 
+  // ---------- card text ----------
+
+  const CLOZE_RE = /\{\{(.+?)\}\}/g;
+
+  function hasCloze(text) {
+    return /\{\{.+?\}\}/.test(text || '');
+  }
+
+  /**
+   * Turns "text with {{answer}} and {{answer::hint}}" into one [front, back] pair per blank.
+   * The front hides that blank (showing the hint if given); the back gives the answer and
+   * the full sentence.
+   */
+  function clozeCards(text, note) {
+    const parts = [...text.matchAll(CLOZE_RE)].map((m) => {
+      const [answer, hint] = m[1].split('::');
+      return { answer: answer.trim(), hint: (hint || '').trim() };
+    });
+    const full = text.replace(CLOZE_RE, (_, inner) => inner.split('::')[0].trim());
+    return parts.map((part, i) => {
+      let k = -1;
+      const front = text.replace(CLOZE_RE, (_, inner) => {
+        k++;
+        if (k !== i) return inner.split('::')[0].trim();
+        return part.hint ? `[ ${part.hint} ]` : '[ ? ]';
+      });
+      const back = `${part.answer}\n\n${full}${note ? `\n\n${note}` : ''}`;
+      return [front, back];
+    });
+  }
+
+  /**
+   * Parses bulk text, one card per line: "question :: answer", "question<TAB>answer",
+   * or a sentence with {{blanks}}. Blank lines and lines starting with # are ignored.
+   */
+  function parseCardLines(text) {
+    const cards = [];
+    let skipped = 0;
+    for (const raw of String(text || '').split(/\r?\n/)) {
+      const line = raw.trim();
+      if (!line || line.startsWith('#')) continue;
+      if (hasCloze(line)) {
+        cards.push(...clozeCards(line));
+        continue;
+      }
+      let i = raw.indexOf('\t');
+      let sepLen = 1;
+      if (i < 0) { i = raw.indexOf('::'); sepLen = 2; }
+      const front = i < 0 ? '' : raw.slice(0, i).trim();
+      const back = i < 0 ? '' : raw.slice(i + sepLen).trim();
+      if (front && back) cards.push([front, back]);
+      else skipped++;
+    }
+    return { cards, skipped };
+  }
+
   // ---------- formatting ----------
 
   function formatDays(d) {
@@ -207,15 +263,15 @@
   }
 
   /**
-   * How many new cards to introduce today. With an exam date, the unseen material is spread
-   * evenly over the days left before the review-only buffer; otherwise the fixed daily limit.
+   * How many new cards to introduce today: the daily setting, raised when an exam date is set and
+   * the unseen material would not otherwise be covered before the review-only buffer.
    */
   function newCardQuota(newRemaining, introducedToday, now, options) {
     const o = Object.assign({}, DEFAULTS, options);
     if (o.examDate == null) return Math.max(0, o.newPerDay - introducedToday);
     const daysLeft = daysBetween(now, o.examDate) - o.examBufferDays;
     const total = newRemaining + introducedToday;
-    const perDay = daysLeft <= 1 ? total : Math.ceil(total / daysLeft);
+    const perDay = daysLeft <= 1 ? total : Math.max(Math.ceil(total / daysLeft), o.newPerDay);
     return Math.max(0, perDay - introducedToday);
   }
 
@@ -322,6 +378,7 @@
     MINUTE, HOUR, DAY, AGAIN, HARD, GOOD, EASY, GRADE_LABELS, DEFAULTS,
     startOfDay, endOfDay, addDays, daysBetween, parseDate, dayKey, makeId,
     createCard, capToExam, review, previewLabel, formatDays, formatDuration,
+    hasCloze, clozeCards, parseCardLines,
     newCardQuota, interleaveNew, buildQueue, nextCard,
     introducedToday, retention, streak, reviewsPerDay, forecast,
   };

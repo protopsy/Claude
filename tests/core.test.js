@@ -84,9 +84,12 @@ test('intervals are capped so the next review lands before the exam', () => {
 
 test('new-card quota spreads material evenly before the exam buffer', () => {
   // 10 days to exam, 2 buffer days -> 8 days to introduce 80 cards
-  assert.equal(C.newCardQuota(80, 0, NOW, { examDate: day(10), examBufferDays: 2 }), 10);
+  assert.equal(C.newCardQuota(80, 0, NOW, { examDate: day(10), examBufferDays: 2, newPerDay: 0 }), 10);
   // already introduced 4 today
-  assert.equal(C.newCardQuota(76, 4, NOW, { examDate: day(10), examBufferDays: 2 }), 6);
+  assert.equal(C.newCardQuota(76, 4, NOW, { examDate: day(10), examBufferDays: 2, newPerDay: 0 }), 6);
+  // the daily setting wins when it is higher than the exam pace
+  assert.equal(C.newCardQuota(148, 0, NOW, { examDate: day(101), examBufferDays: 2, newPerDay: 20 }), 20);
+  assert.equal(C.newCardQuota(800, 0, NOW, { examDate: day(10), examBufferDays: 2, newPerDay: 20 }), 100);
   // inside the buffer: everything remaining
   assert.equal(C.newCardQuota(30, 0, NOW, { examDate: day(2), examBufferDays: 2 }), 30);
   // no exam: fixed daily limit
@@ -147,4 +150,38 @@ test('formatting helpers', () => {
   assert.equal(C.parseDate('2026-10-14'), new Date(2026, 9, 14).getTime());
   assert.equal(C.parseDate('nope'), null);
   assert.equal(C.previewLabel(C.createCard('d', 'Q', 'A', NOW), C.AGAIN, NOW), '1분');
+});
+
+test('cloze: one card per blank, hints, and full sentence on the back', () => {
+  const cards = C.clozeCards('GI는 {{불소}}를 방출하고 치질과 {{화학결합::결합 방식}}한다');
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0][0], 'GI는 [ ? ]를 방출하고 치질과 화학결합한다');
+  assert.equal(cards[0][1], '불소\n\nGI는 불소를 방출하고 치질과 화학결합한다');
+  assert.equal(cards[1][0], 'GI는 불소를 방출하고 치질과 [ 결합 방식 ]한다');
+  assert.ok(cards[1][1].startsWith('화학결합\n\n'));
+  assert.equal(C.hasCloze('no blanks'), false);
+});
+
+test('parseCardLines handles separators, cloze lines, comments and bad lines', () => {
+  const { cards, skipped } = C.parseCardLines([
+    '# 섹션 제목',
+    'Q1 :: A1',
+    'Q2\tA2',
+    '{{아말감}}은 수은 합금이다',
+    '',
+    'no separator here',
+  ].join('\n'));
+  assert.deepEqual(cards.map((c) => c[0]), ['Q1', 'Q2', '[ ? ]은 수은 합금이다']);
+  assert.equal(skipped, 1);
+});
+
+test('built-in draft decks parse completely', () => {
+  const presets = require('../js/decks.js');
+  assert.ok(presets.length >= 1);
+  for (const p of presets) {
+    const { cards, skipped } = C.parseCardLines(p.text);
+    assert.equal(skipped, 0, `${p.key} has lines without a separator`);
+    assert.ok(cards.length >= 100, `${p.key} has ${cards.length} cards`);
+    for (const [f, b] of cards) assert.ok(f && b);
+  }
 });

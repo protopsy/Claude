@@ -3,6 +3,7 @@
   'use strict';
 
   const C = window.StudyCore;
+  const PRESETS = window.StudyPresets || [];
   const STORAGE_KEY = 'exam-study-manager.v1';
   const MAX_CARD_MS = 5 * C.MINUTE;
 
@@ -298,7 +299,11 @@
 
     let plan;
     if (!unseen) plan = '모든 카드를 한 번 이상 공부했습니다. 매일 복습하고 모의 테스트를 풀어 보세요.';
-    else if (opts().examDate != null) plan = `아직 보지 않은 카드가 ${unseen}장 남았습니다. 시험 전에 모두 끝내려면 하루에 새 카드를 최소 <strong>${C.newCardQuota(unseen + C.introducedToday(state.log, now), 0, now, opts())}장</strong>씩 공부하세요.`;
+    else if (opts().examDate != null) {
+      const pace = C.newCardQuota(unseen + C.introducedToday(state.log, now), 0, now, { ...opts(), newPerDay: 0 });
+      const daily = Math.max(pace, opts().newPerDay);
+      plan = `아직 보지 않은 카드가 ${unseen}장 남았습니다. 시험 전에 모두 끝내려면 하루 최소 ${pace}장이 필요하고, 지금 설정으로는 하루 <strong>${daily}장</strong>씩 새로 나옵니다.`;
+    }
     else plan = `아직 보지 않은 카드가 ${unseen}장 남았습니다. 하루에 ${opts().newPerDay}장씩 새로 나옵니다.`;
 
     const rows = state.decks.map((d) => {
@@ -614,7 +619,44 @@
           <button class="primary" type="submit">만들기</button>
         </form>
         <p class="small muted" style="margin-top:.75em">먼저 써 보고 싶다면 <a href="#" data-action="load-example">예제 덱을 불러오세요</a>.</p>
-      </section>`;
+      </section>
+      ${renderPresets()}`;
+  }
+
+  function presetCount(p) {
+    return C.parseCardLines(p.text).cards.length;
+  }
+
+  function renderPresets() {
+    if (!PRESETS.length) return '';
+    const items = PRESETS.map((p) => {
+      const added = state.decks.find((d) => d.presetKey === p.key);
+      return `<div class="preset">
+        <div class="preset-head"><strong>${esc(p.name)}</strong><span class="muted small">카드 ${presetCount(p)}장</span></div>
+        <p class="small muted">${esc(p.note)}</p>
+        ${added
+          ? `<button data-action="open-deck" data-id="${added.id}">추가됨 · 덱 열기</button>`
+          : `<button class="primary" data-action="add-preset" data-key="${esc(p.key)}">덱에 추가</button>`}
+      </div>`;
+    }).join('');
+    return `<section class="panel">
+      <h2>초안 덱</h2>
+      <p class="small muted">공식 출제 목차를 기준으로 Claude가 만든 초안입니다. <strong>틀린 내용이 있을 수 있으니</strong> 소책자나 라플을 읽을 때 해당 카드를 책과 비교해 고치거나(✎) 지우세요(🗑). 책이 항상 우선입니다.</p>
+      <div class="preset-list">${items}</div>
+    </section>`;
+  }
+
+  function addPreset(key) {
+    const p = PRESETS.find((x) => x.key === key);
+    if (!p || state.decks.some((d) => d.presetKey === key)) return;
+    const now = Date.now();
+    const d = { id: C.makeId(), name: p.name, createdAt: now, presetKey: p.key };
+    state.decks.push(d);
+    const { cards } = C.parseCardLines(p.text);
+    cards.forEach(([f, b], i) => state.cards.push(C.createCard(d.id, f, b, now + i)));
+    save();
+    navigate('deck', d.id);
+    toast(`${p.name} 덱에 카드 ${cards.length}장을 추가했습니다.`);
   }
 
   function renderDeck() {
@@ -653,18 +695,19 @@
       <section class="panel">
         <h2>카드 추가</h2>
         <p class="small muted">팁: 카드 한 장에 한 가지 내용만, 질문 형태로, 정답은 내 말로 적으세요. 단순 정의보다 "왜?", "어떻게?" 질문이 더 효과적입니다.</p>
+        <p class="small muted"><strong>빈칸 카드:</strong> 책 문장을 그대로 적고 외울 부분만 <code>{{ }}</code>로 감싸면 정답 칸은 비워도 됩니다. 빈칸마다 카드가 한 장씩 생깁니다.<br>예: <code>글래스아이오노머는 {{불소}}를 방출하고 치질과 {{화학결합}}한다</code></p>
         <form data-form="add-card">
-          <label for="front">질문</label>
-          <textarea id="front" name="front" required data-autofocus placeholder="예: 심장에는 왜 폐순환이 따로 있을까?"></textarea>
-          <label for="back">정답</label>
-          <textarea id="back" name="back" required></textarea>
+          <label for="front">질문 또는 빈칸 문장</label>
+          <textarea id="front" name="front" required data-autofocus placeholder="예: Angle Class II 부정교합의 기준은?"></textarea>
+          <label for="back">정답 <span class="muted small">(빈칸 카드는 비워도 됨)</span></label>
+          <textarea id="back" name="back"></textarea>
           <div class="row" style="margin-top:.75em"><button class="primary" type="submit">카드 추가</button><span class="small muted">Ctrl+Enter로 추가</span></div>
         </form>
         <details style="margin-top:1em">
           <summary>한꺼번에 가져오기</summary>
           <form data-form="bulk-import">
-            <p class="small muted">한 줄에 카드 한 장: <code>질문 :: 정답</code> 형식, 또는 질문과 정답을 Tab으로 구분하세요(스프레드시트에서 두 열을 복사해 바로 붙여넣기).</p>
-            <textarea name="text" rows="8" placeholder="프랑스의 수도 :: 파리&#10;세포의 발전소 :: 미토콘드리아"></textarea>
+            <p class="small muted">한 줄에 카드 한 장: <code>질문 :: 정답</code>, 질문과 정답을 Tab으로 구분(스프레드시트에서 두 열 복사), 또는 <code>{{ }}</code> 빈칸 문장. <code>#</code>으로 시작하는 줄은 무시합니다.</p>
+            <textarea name="text" rows="8" placeholder="Black 분류 Class II 와동의 위치는? :: 구치부 인접면&#10;아말감의 상 중 가장 약한 것은 {{γ₂}}이다"></textarea>
             <div class="row" style="margin-top:.5em"><button type="submit">가져오기</button></div>
           </form>
         </details>
@@ -684,22 +727,6 @@
           <button type="button" class="danger" data-action="delete-deck" data-id="${d.id}">덱 삭제</button>
         </form>
       </section>`;
-  }
-
-  function parseBulk(text) {
-    const cards = [];
-    let skipped = 0;
-    for (const line of text.split(/\r?\n/)) {
-      if (!line.trim()) continue;
-      let i = line.indexOf('\t');
-      let sepLen = 1;
-      if (i < 0) { i = line.indexOf('::'); sepLen = 2; }
-      const front = i < 0 ? '' : line.slice(0, i).trim();
-      const back = i < 0 ? '' : line.slice(i + sepLen).trim();
-      if (front && back) cards.push([front, back]);
-      else skipped++;
-    }
-    return { cards, skipped };
   }
 
   const EXAMPLE_CARDS = [
@@ -795,8 +822,9 @@
           <label for="s-buffer">시험 직전 복습 전용 기간 (일)</label>
           <input id="s-buffer" type="number" name="examBufferDays" min="0" max="30" value="${esc(s.examBufferDays)}">
           <p class="small muted">이 기간에는 새 카드가 나오지 않아 복습과 모의 테스트에만 집중할 수 있습니다.</p>
-          <label for="s-new">하루 새 카드 수 (시험 날짜가 없을 때 사용)</label>
+          <label for="s-new">하루 새 카드 수</label>
           <input id="s-new" type="number" name="newPerDay" min="0" max="500" value="${esc(s.newPerDay)}">
+          <p class="small muted">시험 전에 모든 카드를 끝내기에 부족하면 자동으로 늘어납니다. 복습이 너무 많아지면 줄이세요.</p>
 
           <h2 style="margin-top:1.2em">학습</h2>
           <label class="inline"><input type="checkbox" name="typeAnswer" ${s.typeAnswer ? 'checked' : ''}> 정답을 보기 전에 내 답을 직접 입력하기 (추천: 능동적으로 떠올리게 됩니다)</label>
@@ -936,6 +964,15 @@
       <p>위쪽 타이머를 사용하세요. 25분 집중, 5분 휴식, 4번마다 긴 휴식입니다. 쉬는 시간이 집중력을 유지해 주고,
       타이머가 있으면 공부를 시작하기도 쉬워집니다.</p>
 
+      <h2>빈칸 카드로 빠르게 만들기</h2>
+      <p>책의 중요한 문장을 그대로 적고 외울 부분만 <code>{{ }}</code>로 감싸세요. 빈칸마다 카드가 한 장씩 생깁니다.
+      치주, 교정, 소치처럼 교과서 문장이 그대로 출제되는 과목에 특히 잘 맞습니다.</p>
+      <ul>
+        <li><code>글래스아이오노머는 {{불소}}를 방출한다</code> → "글래스아이오노머는 [ ? ]를 방출한다"</li>
+        <li>힌트를 주려면 <code>{{정답::힌트}}</code>: <code>{{γ₂::상 이름}}</code> → "[ 상 이름 ]"</li>
+        <li>휴대폰 음성 입력으로 문장을 불러 넣으면 더 빠릅니다.</li>
+      </ul>
+
       <h2>좋은 카드 만드는 법</h2>
       <ul>
         <li>카드 한 장에 한 가지 내용만 넣으세요. 긴 답은 나누세요.</li>
@@ -1071,6 +1108,7 @@
       case 'study-deck': navigate('study', id); break;
       case 'practice-deck': navigate('practice', id); break;
       case 'load-example': e.preventDefault(); loadExample(); break;
+      case 'add-preset': addPreset(el.dataset.key); break;
       case 'edit-card': ui.editingCardId = id; render(); break;
       case 'cancel-edit': ui.editingCardId = null; render(); break;
       case 'goto-card': ui.view = 'deck'; ui.deckId = el.dataset.deck; ui.editingCardId = id; render(); break;
@@ -1176,10 +1214,20 @@
       case 'add-card': {
         const front = String(fd.get('front') || '').trim();
         const back = String(fd.get('back') || '').trim();
-        if (!front || !back) return;
-        state.cards.push(C.createCard(ui.deckId, front, back, Date.now()));
+        if (!front) return;
+        const now = Date.now();
+        if (C.hasCloze(front)) {
+          const made = C.clozeCards(front, back);
+          made.forEach(([f, b], i) => state.cards.push(C.createCard(ui.deckId, f, b, now + i)));
+          toast(`빈칸 카드 ${made.length}장을 추가했습니다.`);
+        } else if (back) {
+          state.cards.push(C.createCard(ui.deckId, front, back, now));
+          toast('카드를 추가했습니다.');
+        } else {
+          toast('정답을 입력하거나, 질문에 {{ }}로 빈칸을 표시하세요.');
+          return;
+        }
         save();
-        toast('카드를 추가했습니다.');
         render();
         break;
       }
@@ -1197,7 +1245,7 @@
         break;
       }
       case 'bulk-import': {
-        const { cards, skipped } = parseBulk(String(fd.get('text') || ''));
+        const { cards, skipped } = C.parseCardLines(String(fd.get('text') || ''));
         const now = Date.now();
         cards.forEach(([f, b], i) => state.cards.push(C.createCard(ui.deckId, f, b, now + i)));
         save();
